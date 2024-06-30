@@ -61,6 +61,7 @@ def main():
     jira_server = os.environ["JIRA_URL"]
     jira_username = os.environ["JIRA_API_USER"]
     jira_password = os.environ["JIRA_API_AUTH_TOKEN"]
+    image_name = os.environ["IMAGE"]
     project_key = os.environ['JIRA_PROJECT_KEY']
 
     existing_issues = pull_existing_issues(jira_server, jira_password, jira_username, project_key)
@@ -68,112 +69,87 @@ def main():
     issue_type = get_issue_type(jira_server, jira_password, jira_username, project_key)
     print(issue_type)
 
-    # get list of k8s-inventory images
+    actl_output = json.loads(run_command(
+        f"anchorectl image check {image_name} -o json --detail | jq '.evaluations[].details.findings'"))
+    for finding in actl_output:
+        if finding["action"] == "stop" and finding['triggerId'] not in str(existing_issues):
+            url = f"{jira_server}/rest/api/3/issue"
 
-    inventory_list = json.loads(run_command("anchorectl inventory list -o json"))
+            headers = {
+                "Accept": "application/json",
+                "Content-Type": "application/json"
+            }
 
-    # iterate through policy findings
-
-    for inv_image in inventory_list:
-        try:
-            run_command(f"anchorectl image add --wait {inv_image['imageTag']}")
-        except:
-            pass
- 
-        actl_output = json.loads(run_command(
-            f"anchorectl image check {inv_image['imageTag']} -o json --detail | jq '.evaluations[].details.findings'"))
-
-        for finding in actl_output:
-            if finding["action"] == "stop" and finding['triggerId'] not in str(existing_issues):
-                url = f"{jira_server}/rest/api/3/issue"
-
-                headers = {
-                    "Accept": "application/json",
-                    "Content-Type": "application/json"
-                }
-
-                summary = finding['message'][:235] + (finding['message'][235:] and '..')
-
-                payload = json.dumps({
-                    "fields": {
-                        "description": {
-                            "content": [
-                                {
-                                    "content": [
-                                        {
-                                            "text": f"Gate: {finding['gate']}",
-                                            "type": "text"
-                                        }
-                                    ],
-                                    "type": "paragraph"
-                                },
-                                {
-                                    "content": [
-                                        {
-                                            "text": f"Policy ID: {finding['policyId']}",
-                                            "type": "text"
-                                        }
-                                    ],
-                                    "type": "paragraph"
-                                },
-                                {
-                                    "content": [
-                                        {
-                                            "text": f"Image Tag: {inv_image['imageTag']}",
-                                            "type": "text"
-                                        }
-                                    ],
-                                    "type": "paragraph"
-                                },
-                                {
-                                    "content": [
-                                        {
-                                            "text": f"Trigger Name: {finding['trigger']}",
-                                            "type": "text"
-                                        }
-                                    ],
-                                    "type": "paragraph"
-                                },
-                                {
-                                    "content": [
-                                        {
-                                            "text": f"Trigger ID: {finding['triggerId']}",
-                                            "type": "text"
-                                        }
-                                    ],
-                                    "type": "paragraph"
-                                },
-                                {
-                                    "content": [
-                                        {
-                                            "text": f"Message: {finding['message']}",
-                                            "type": "text"
-                                        }
-                                    ],
-                                    "type": "paragraph"
-                                }
-                            ],
-                            "type": "doc",
-                            "version": 1
-                        },
-                        "issuetype": {"id": issue_type},
-                        "project": {"key": f"{project_key}"},
-                        "summary": f"[ANCHORE] {summary}"
+            payload = json.dumps({
+                "fields": {
+                    "description": {
+                        "content": [
+                            {
+                                "content": [
+                                    {
+                                        "text": f"Gate: {finding['gate']}",
+                                        "type": "text"
+                                    }
+                                ],
+                                "type": "paragraph"
+                            },
+                            {
+                                "content": [
+                                    {
+                                        "text": f"Policy ID: {finding['policyId']}",
+                                        "type": "text"
+                                    }
+                                ],
+                                "type": "paragraph"
+                            },
+                            {
+                                "content": [
+                                    {
+                                        "text": f"Image Tag: {image_name}",
+                                        "type": "text"
+                                    }
+                                ],
+                                "type": "paragraph"
+                            },
+                            {
+                                "content": [
+                                    {
+                                        "text": f"Trigger Name: {finding['trigger']}",
+                                        "type": "text"
+                                    }
+                                ],
+                                "type": "paragraph"
+                            },
+                            {
+                                "content": [
+                                    {
+                                        "text": f"Trigger ID: {finding['triggerId']}",
+                                        "type": "text"
+                                    }
+                                ],
+                                "type": "paragraph"
+                            }
+                        ],
+                        "type": "doc",
+                        "version": 1
                     },
-                    "update": {}
-                })
+                    "issuetype": {"id": issue_type},
+                    "project": {"key": f"{project_key}"},
+                    "summary": f"[ANCHORE] {finding['message']}"
+                },
+                "update": {}
+            })
 
-                response = requests.request(
-                    "POST",
-                    url,
-                    data=payload,
-                    headers=headers,
-                    auth=(jira_username, jira_password)
-                )
+            response = requests.request(
+                "POST",
+                url,
+                data=payload,
+                headers=headers,
+                auth=(jira_username, jira_password)
+            )
 
-                print(json.dumps(json.loads(response.text),
-                    sort_keys=True, indent=4, separators=(",", ": ")))
-
+            print(json.dumps(json.loads(response.text),
+                  sort_keys=True, indent=4, separators=(",", ": ")))
 
 if __name__ == "__main__":
     main()
